@@ -1,0 +1,7 @@
+/home/shahin/Dropbox/Projects/SingleCell/RNA2ATAC/codes/transACTION/Updated_DECODE/include/armadillo/CMakeFiles/install/strip.dir
+/home/shahin/Dropbox/Projects/SingleCell/RNA2ATAC/codes/transACTION/Updated_DECODE/include/armadillo/CMakeFiles/edit_cache.dir
+/home/shahin/Dropbox/Projects/SingleCell/RNA2ATAC/codes/transACTION/Updated_DECODE/include/armadillo/CMakeFiles/armadillo.dir
+/home/shahin/Dropbox/Projects/SingleCell/RNA2ATAC/codes/transACTION/Updated_DECODE/include/armadillo/CMakeFiles/list_install_components.dir
+/home/shahin/Dropbox/Projects/SingleCell/RNA2ATAC/codes/transACTION/Updated_DECODE/include/armadillo/CMakeFiles/install/local.dir
+/home/shahin/Dropbox/Projects/SingleCell/RNA2ATAC/codes/transACTION/Updated_DECODE/include/armadillo/CMakeFiles/rebuild_cache.dir
+/home/shahin/Dropbox/Projects/SingleCell/RNA2ATAC/codes/transACTION/Updated_DECODE/include/armadillo/CMakeFiles/install.dir

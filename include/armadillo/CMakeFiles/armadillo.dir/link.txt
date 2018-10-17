@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC  -std=c++11 -O2  -Wl,--no-as-needed -shared -Wl,-soname,libarmadillo.so.8 -o libarmadillo.so.8.400.0 CMakeFiles/armadillo.dir/src/wrapper.cpp.o -Wl,-rpath,/home/shahin/anaconda2/lib: -lmkl_rt /home/shahin/anaconda2/lib/libhdf5.so -lrt -lpthread /home/shahin/anaconda2/lib/libz.so -ldl -lm -larpack -lsuperlu 

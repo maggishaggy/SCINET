@@ -1,0 +1,6 @@
+DECODE
+libdecode.a
+*.o
+*.so
+matlab/*.mexa64
+input/datasets
