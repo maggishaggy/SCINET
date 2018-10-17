@@ -1,6 +1,4 @@
-DECODE
-libdecode.a
+scinet*
 *.o
 *.so
 matlab/*.mexa64
-input/datasets
