@@ -2,10 +2,10 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 constructNet <- function(A, net, samples, rand_sample_no, rand_sample_size, thread_no) {
-    .Call(`_scDiffNet_constructNet`, A, net, samples, rand_sample_no, rand_sample_size, thread_no)
+    .Call(`_SCINET_constructNet`, A, net, samples, rand_sample_no, rand_sample_size, thread_no)
 }
 
 constructDiffNet <- function(mu1, sigma1_sq, n1, mu2, sigma2_sq, n2) {
-    .Call(`_scDiffNet_constructDiffNet`, mu1, sigma1_sq, n1, mu2, sigma2_sq, n2)
+    .Call(`_SCINET_constructDiffNet`, mu1, sigma1_sq, n1, mu2, sigma2_sq, n2)
 }
 

@@ -19,7 +19,7 @@ endif
 LIB_FLAGS=-lstdc++ ${LINALG} -lpthread
 INCLUDE=-I./include -I./include/armadillo/include -I./include/stats
 
-SRC=src/scDiffNet.cc src/cdflib.cc src/asa241.cc
+SRC=src/scinet.cc src/cdflib.cc src/asa241.cc
 OBJ=$(SRC:.cc=.o)
 
 MATLAB_SRC=matlab/mex_PRImpute.cc matlab/mex_constructNet.cc matlab/mex_constructDiffNets.cc
@@ -50,7 +50,7 @@ matlab: $(LIBNAME) $(MATLAB_MEX)
 
 R: $(LIBNAME)
 	cp $(LIBNAME) Rpackage/bin/	
-	cp include/scDiffNet.h Rpackage/inst/include	
+	cp include/scinet.h Rpackage/inst/include	
 	R CMD INSTALL --preclean Rpackage/
 
 				
@@ -61,7 +61,7 @@ clean:
 
 install:
 	cp $(LIBNAME) /usr/lib/
-	cp include/scDiffNet.h /usr/include
+	cp include/scinet.h /usr/include
 	@echo done
 
 archive:
