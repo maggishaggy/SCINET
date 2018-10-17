@@ -1,1 +1,1 @@
-Single-Cell Differential Network Analysis (scDiffNet)
+Single-Cell Imputation and NETwork inference (SCINET)
