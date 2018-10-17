@@ -17,9 +17,9 @@ library(ggplot2)
 ### Import expression matrix
 
 ```{r}
-expression = readMM('../input/datasets/HumanBrain/Lake_Fcx_expression.mm');
-gene_names = read.table('../input/datasets/HumanBrain/Lake_Fcx_gene_annotations.txt', as.is = T, header = T)$HGNC
-sample_annotations = read.table('../input/datasets/HumanBrain/Lake_Fcx_sample_annotations.txt', header = T)
+expression = readMM('../../input/datasets/HumanBrain/Lake_Fcx_expression.mm');
+gene_names = read.table('../../input/datasets/HumanBrain/Lake_Fcx_gene_annotations.txt', as.is = T, header = T)$HGNC
+sample_annotations = read.table('../../input/datasets/HumanBrain/Lake_Fcx_sample_annotations.txt', header = T)
 
 filtered_cells = which(sample_annotations$Labels %in% c('End', 'Per'))
 sample_annotations = sample_annotations[-filtered_cells, ]
@@ -78,8 +78,8 @@ gene.cell.imputed.profile = gene.metacell.imputed.profile %*% H_final
 ## Load PCNet (Parsed from: "Systematic Evaluation of Molecular Networks for Discovery of Disease Genes")
 
 ```{r}
-PCNet = readMM('../input/networks/PCNet/PCNet.mm')
-PCNet_genes = read.csv('../input/networks/PCNet/PCNet_genes.txt')$Genes
+PCNet = readMM('../../input/networks/PCNet/PCNet.mm')
+PCNet_genes = read.csv('../../input/networks/PCNet/PCNet_genes.txt')$Genes
 
 ```
 
