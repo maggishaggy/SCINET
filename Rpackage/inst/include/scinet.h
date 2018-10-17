@@ -31,7 +31,7 @@ uvec read_uvec(char *path);
 
 mat PRImpute(sp_mat profile, sp_mat net, uvec cols, int method, double alpha);
 
-field<mat> constructNet(sp_mat A, mat net, uvec samples, int rand_sample_no, int rand_sample_size, int thread_no);
+field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int rand_sample_size, int thread_no);
 mat identifyDiffEdges(mat mu1, mat sigma1_sq, int n1, mat mu2, mat sigma2_sq, int n2);
 
 

@@ -85,7 +85,7 @@ mat identifyDiffEdges(mat mu1, mat sigma1, int n1, mat mu2, mat sigma2, int n2) 
 	return diffNet;
 }
 
-field<mat> constructNet(sp_mat A, mat net, uvec samples, int rand_sample_no, int rand_sample_size, int thread_no) {			
+field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int rand_sample_size, int thread_no) {			
 	thread_no = min(thread_no, rand_sample_size);
 	int gene_no = A.n_rows;
 	int sample_no = A.n_cols;

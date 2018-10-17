@@ -29,8 +29,6 @@ Labels = sample_annotations$Labels
 UL = sort(unique(Labels))
 labels = match(Labels, UL)
 
-
-
 d = colSums(expression)
 med = median(d)
 D_inv = Diagonal(n = length(d), x = 1 / d)
@@ -49,7 +47,6 @@ reduced_profile = reduce_GeneExpression(expression, PCA_dim=30, iter = 10)
 S_r = reduced_profile$cell_signatures
 V = reduced_profile$V
 
-
 ACTION_res = run_ACTION(S_r, k_min=2, k_max = 15, numThreads = 8)
 H = ACTION_res$CellProfiles
 C = ACTION_res$SmoothingMats;
@@ -67,20 +64,17 @@ updated_profiles = refine_solution(S_r, W = metagene.metacell)
 C_final = updated_profiles$Refined_C
 H_final = updated_profiles$Refined_H
 
-
 # "Impute" gene expression values
 metagene.metacell.final = S_r%*%C_final
 gene.metacell.imputed.profile = V%*%metagene.metacell.final
 gene.cell.imputed.profile = gene.metacell.imputed.profile %*% H_final
 ```
 
-
 ## Load PCNet (Parsed from: "Systematic Evaluation of Molecular Networks for Discovery of Disease Genes")
 
 ```{r}
 PCNet = readMM('../../input/networks/PCNet/PCNet.mm')
 PCNet_genes = read.csv('../../input/networks/PCNet/PCNet_genes.txt')$Genes
-
 ```
 
 
@@ -110,14 +104,17 @@ order2 = match(common_genes, PCNet_genes)
 net = matrix(as.numeric(PCNet[order2, order2] > 0), ncol = length(common_genes))
 
 # save(A, net, common_genes, Labels, file = '../results/Lake_Fcx_mapped_datasets.RData')
-```
+dim(net)
+dim(A)
 
+A <- as.matrix(A)
+```
 
 ### Network inference
 
 ```{r}
+##################################################################################################
 library(SCINET)
-
 # load(file = '../results/Lake_Fcx_mapped_datasets.RData')
 
 mu = vector("list", length(UL))
@@ -125,15 +122,15 @@ sigma = vector("list", length(UL))
 
 names(mu) = UL
 names(sigma) = UL
-
-for (celltype in UL) {
+##################################################################################################
+for (celltype in UL[1]) {
+#for (celltype in UL) {
   celltype_samples = which(Labels %in% celltype)
   Net_stats = constructNet(A = A, net=net, samples = celltype_samples, rand_sample_no = 100, rand_sample_size = 30, thread_no = 8)
   mu[[celltype]] = as(Net_stats$mu, 'sparseMatrix');
   sigma[[celltype]] = as(Net_stats$sigma_sq, 'sparseMatrix');
 }
-
-
+##################################################################################################
 for (celltype in UL) {
   adj = mu[[celltype]];
   adj[is.na(adj)] = 0;
@@ -143,7 +140,7 @@ for (celltype in UL) {
   EdgeList.df = EdgeList.df[order(EdgeList.df$Weight, decreasing = TRUE),]
   write.table(EdgeList.df, sprintf('../results/networks/%s_net.tsv', celltype), quote = FALSE, col.names = TRUE, row.names = FALSE)
 }
-
+#################################################
 save(mu, common_genes, file = '../results/networks/Lake_Fcx_networks.RData')
-
+#################################################
 ```

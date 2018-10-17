@@ -11,7 +11,7 @@ using namespace arma;
 
 // [[Rcpp::depends(RcppArmadillo)]]
 // [[Rcpp::export]]
-List constructNet(sp_mat A, mat net, IntegerVector samples, int rand_sample_no, int rand_sample_size, int thread_no) {
+List constructNet(mat A, mat net, IntegerVector samples, int rand_sample_no, int rand_sample_size, int thread_no) {
 	uvec samples_uvec(samples.size());
 	for (int i = 0; i < samples_uvec.n_elem; i++) {
 		samples_uvec(i) = (uword)(samples(i)-1);
