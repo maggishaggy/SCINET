@@ -123,7 +123,7 @@ sigma = vector("list", length(UL))
 names(mu) = UL
 names(sigma) = UL
 ##################################################################################################
-for (celltype in UL[1]) {
+for (celltype in UL) {
 #for (celltype in UL) {
   celltype_samples = which(Labels %in% celltype)
   Net_stats = constructNet(A = A, net=net, samples = celltype_samples, rand_sample_no = 100, rand_sample_size = 30, thread_no = 8)
@@ -138,9 +138,9 @@ for (celltype in UL) {
   EdgeList = as(adj, 'dgTMatrix')
   EdgeList.df = data.frame(Source=common_genes[EdgeList@i+1], Target=common_genes[EdgeList@j+1], Weight=EdgeList@x)
   EdgeList.df = EdgeList.df[order(EdgeList.df$Weight, decreasing = TRUE),]
-  write.table(EdgeList.df, sprintf('../results/networks/%s_net.tsv', celltype), quote = FALSE, col.names = TRUE, row.names = FALSE)
+  write.table(EdgeList.df, sprintf('../../results/networks/%s_net.tsv', celltype), quote = FALSE, col.names = TRUE, row.names = FALSE)
 }
 #################################################
-save(mu, common_genes, file = '../results/networks/Lake_Fcx_networks.RData')
+save(mu, sigma, common_genes, file = '../../results/networks/Lake_Fcx_networks.RData')
 #################################################
 ```
