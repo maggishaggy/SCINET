@@ -98,7 +98,8 @@ field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int ra
 	for(int i = 0; i < samples.n_elem; i++) {
 		Af.col(i) = vec(A.col(samples(i)));
 	}
-		
+	
+	printf("Computing gene-specificity factor\n");	
 	vec row_means = mean(Af, 1);
 	uvec row_perm_forward = stable_sort_index(row_means);
 	uvec row_perm = stable_sort_index(row_perm_forward);	
@@ -112,6 +113,7 @@ field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int ra
 	A = A.t();
 	mat Z(samples.n_elem, gene_no);	
 	
+	printf("Computing Rank-Based Inverse Normal Transformation\n");	
 	#pragma omp parallel for num_threads(thread_no) 
 	for(int i = 0; i < gene_no; i++) {
 		vec v = vec(A.col(i)); // gene i (A is already transposed)				
@@ -136,15 +138,27 @@ field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int ra
 	uvec jj = trans(subs.row(1));
 
 
-	mat subsample_weights = ones(vv.n_elem, rand_sample_no);
-	//mat rand_samples = round(stats::runif<arma::mat>(rand_sample_no, rand_sample_size, 0.0, (double)samples.n_elem-1, 0));			
-	mat rand_samples = round(sampleUnif(rand_sample_no, rand_sample_size, 0.0, (double)samples.n_elem-1, 0));
+	printf("Obtaining workspace\n");
+	// Instead of the whole distribution, only keep data needed to computed mean/std
+	//mat subsample_weights = ones(vv.n_elem, rand_sample_no);
+	vec subsample_sums = zeros(vv.n_elem, 1);
+	vec subsample_sums_sq = zeros(vv.n_elem, 1);
 	
-	#pragma omp parallel for num_threads(thread_no) 
+	//mat rand_samples = round(stats::runif<arma::mat>(rand_sample_no, rand_sample_size, 0.0, (double)samples.n_elem-1, 0));			
+	mat rand_samples = round(sampleUnif(rand_sample_no, rand_sample_size, 0.0, (double)samples.n_elem-1, 0));	
+	
+	int perc = 0, total_idx = 0;
 	for( int k = 0; k < rand_sample_no; k++) {			
-		uvec idx;	
+		if(round(100*(double)total_idx/rand_sample_no) > perc) {
+			perc = round(100*(double)total_idx/rand_sample_no);
+			printf("%d %% done\n", perc); fflush(stdout);
+			fflush(stdout);
+		}		
 		
-		mat subsample_scores(vv.n_elem, rand_sample_size);		
+		//mat subsample_scores(vv.n_elem, rand_sample_size);		
+		
+		vec chi2_stat = zeros(vv.n_elem, 1);
+		#pragma omp parallel for num_threads(thread_no) 
 		for (int i = 0; i < rand_sample_size; i++) {
 			vec c = Z.col(rand_samples(k, i));		
 			
@@ -161,11 +175,8 @@ field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int ra
 				v(idx) = tail_prob;
 			}
 			
-			subsample_scores.col(i) = v;						
+			chi2_stat += -2.0*arma::log(v);
 		}	
-		
-		mat chi2_stat = -2.0*arma::sum(arma::log(subsample_scores), 1);				
-		//mat meta_pvals = ones(size(chi2_stat)) - stats::pchisq(chi2_stat, 2.0*rand_sample_size);
 					
 		vec meta_pvals(vv.n_elem);
 		double cum, ccum, threshold, dof = 2*rand_sample_size;
@@ -180,26 +191,30 @@ field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int ra
 		pvals_corr.transform( [](double val) { return (val < 1e-300?1e-300:val); } );
 		
 		vec weights = -arma::log10(pvals_corr);
+		weights.replace(datum::nan, 0);  // replace each NaN with 0
+		weights.replace(datum::inf, 0);  // replace each inf with 0
+
 		
-		subsample_weights.col(k) = weights;
+		subsample_sums += weights;
+		subsample_sums_sq += square(weights);
+		
+		total_idx++;
 	} 
 	
-	subsample_weights.replace(datum::nan, 0);  // replace each NaN with 0
-	subsample_weights.replace(datum::inf, 0);  // replace each inf with 0
-
-	int nV = net.n_cols;
-	if(1 < rand_sample_no) {
-		vec mu = mean(subsample_weights, 1);
-		vec sigma = stddev(subsample_weights, 0, 1);
-		
-		net_stats(0) = mat(sp_mat(subs, mu, nV, nV));
-		net_stats(1) = mat(sp_mat(subs, sigma, nV, nV));
-	}
+	vec sigma;
+	vec mu = subsample_sums / rand_sample_no;	
+	if(rand_sample_no > 1) {
+		sigma = (subsample_sums_sq - square(subsample_sums)/(rand_sample_no)) / (rand_sample_no-1);
+	} 
 	else {
-		net_stats(0) = mat(sp_mat(subs, subsample_weights, nV, nV));		
-		net_stats(1) = zeros(nV, nV);
+		sigma = zeros(size(mu));
 	}
-	
+
+	// Reconstruct networks
+	int nV = net.n_cols;
+	net_stats(0) = mat(sp_mat(subs, mu, nV, nV));
+	net_stats(1) = mat(sp_mat(subs, sigma, nV, nV));
+			
 	return net_stats;
 }
 
