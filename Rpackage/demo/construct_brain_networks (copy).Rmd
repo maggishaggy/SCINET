@@ -1,0 +1,613 @@
+---
+title: "Constructing cell-type-specific networks in human prefrontal cortex"
+output: html_notebook
+---
+
+## Import libraries
+```{r message=FALSE, warning=FALSE}
+library(Matrix)
+library(ACTION)
+library(igraph)
+library(RColorBrewer)
+library(ggplot2)
+```
+
+
+## Process expression profile
+### Import expression matrix
+
+```{r}
+min.cells = 30;
+
+expression = as(readMM('../../input/datasets/HumanBrain/Lake_Fcx_expression.mm'), 'CsparseMatrix')
+gene_names = read.table('../../input/datasets/HumanBrain/Lake_Fcx_gene_annotations.txt', as.is = T, header = T)$HGNC
+sample_annotations = read.table('../../input/datasets/HumanBrain/Lake_Fcx_sample_annotations.txt', header = T)
+
+filtered_cells = which(sample_annotations$Labels %in% c('Endo', 'Per'))
+sample_annotations = sample_annotations[-filtered_cells, ]
+expression = expression[, -filtered_cells]
+dim(expression)
+
+d = Matrix::rowSums(expression > 0);
+gene.filter.mask = d < min.cells;
+sum(gene.filter.mask)
+expression = expression[!gene.filter.mask,]
+gene_names = gene_names[!gene.filter.mask]
+
+dim(expression)
+
+Labels = sample_annotations$Labels
+UL = sort(unique(Labels))
+labels = match(Labels, UL)
+
+d = Matrix::colSums(expression)
+med = median(d)
+D_inv = Diagonal(n = length(d), x = 1 / d)
+expression  = expression %*% D_inv # normalize
+expression = med*expression # re-scale
+expression = log(1 + expression) # variance-stablize (using log-transform)
+
+# RNASeq = list(expression = expression, gene_names = gene_names, sample_annotations = sample_annotations)
+# saveRDS(RNASeq, '/home/shahin/Dropbox/Projects/SingleCell/repositories/ACTION/ACTION_submodules/ACTIONcore/input/datasets/HumanBrain/preprocessed.RDS')
+
+
+expression = as(expression, "sparseMatrix") # convert to dgCMatrix format for passing to RCPPArmadillo (in ACTION)
+
+# writeMM(expression, '/home/shahin/Dropbox/Projects/SingleCell/repositories/ACTION/ACTION_submodules/ACTIONcore/input/datasets/HumanBrain/expression.mm')
+
+save(expression, gene_names, sample_annotations, file='/home/shahin/Dropbox/Projects/SingleCell/RSG18/results/final/updates/Lake_Fcx_expression_org.RData')
+
+```
+
+## Run MAGIC
+```{r eval=FALSE}
+library(Rmagic)
+MAGIC.out <- magic(t(expression), genes='all_genes', n.jobs = -1)
+MAGIC.imputed.profile = t(as.matrix(MAGIC.out))
+
+save(MAGIC.imputed.profile, sample_annotations, gene_names, file='../../input/datasets/HumanBrain/Lake_Fcx_expression_MAGIC.RData')
+
+MAGIC.imputed.profile = readRDS('../../input/datasets/HumanBrain/Lake_Fcx_expression_MAGIC.RDS')
+
+
+```
+
+### Run ACTION
+
+```{r}
+library(ACTION)
+reduced_profile = reduce_GeneExpression(expression, PCA_dim=30, method = 0, iter = 10)
+S_r = reduced_profile$cell_signatures
+V = reduced_profile$V
+
+ACTION_res = run_ACTION(S_r, k_min=2, k_max = 20, numThreads = 8)
+H = ACTION_res$CellProfiles
+C = ACTION_res$SmoothingMats;
+```
+
+
+### Impute expression values by regressing over metacells
+```{r}
+H_stacked = do.call(rbind, H)
+C_stacked = do.call(cbind, C)
+
+
+
+metagene.metacell = S_r %*% C_stacked
+metacell.cell = H_stacked
+updated_profiles = refine_solution(S_r, W = metagene.metacell, update_W = 0)
+C_final = updated_profiles$Refined_C
+H_final = updated_profiles$Refined_H
+
+# rowSums(H_final>0)
+# table(Labels[H_final[100, ] > 0.2])
+
+
+# "Impute" gene expression values
+metagene.metacell.final = S_r%*%C_stacked
+gene.metacell.imputed.profile = V%*%metagene.metacell.final
+Arch.imputed.profile = gene.metacell.imputed.profile %*% H_final
+
+# save(Arch.imputed.profile, sample_annotations, gene_names, file='../../input/datasets/HumanBrain/Lake_Fcx_expression_archImpute.RData')
+
+# Imputation method 2
+# gene.metacell.final = expression%*%C_stacked
+# Arch.imputed.profile2 = gene.metacell.final %*%  H_final
+
+
+dim(Arch.imputed.profile)
+```
+
+
+
+
+
+
+## PageRank-based imputation
+
+```{r}
+# ACTIONet = build_ACTIONnet(H, round(sqrt(dim(expression)[2])), MNN = 0, metric = 0, 8)
+ACTIONet = build_ACTIONnet(H, 30, MNN = 0, metric = 0, 8)
+
+alpha_val = 0.85
+Q = get.PR.matrix(ACTIONet, alpha_val)
+E = t(expression)
+ss = Matrix::colSums(E)
+ss[ss==0] = 1
+E = scale(E, center = FALSE, scale=ss)
+PR.imputed.profile = t((1-alpha_val)*solve(as.matrix(Q), as.matrix(E)))
+
+system.time( {nom = apply(expression, 1, function(x) { v = x[x>0]; z = 0.6745*(v - median(v)) / mad(v); outlier.mask =  z > 3.5; m = max(v[!outlier.mask])})} )
+
+system.time( {denom = apply(PR.imputed.profile, 1, function(x) { v = x[x>0]; z = 0.6745*(v - median(v)) / mad(v); outlier.mask =  z > 3.5; m = max(v[!outlier.mask])})} )
+
+kappa = nom / denom
+
+system.time( {PR.imputed.profile.rescaled = diag(kappa) %*% PR.imputed.profile} )
+
+PR.imputed.profile.rescaled_K30_0.85 = PR.imputed.profile.rescaled
+
+```
+
+## scImpute
+
+```{r}
+# Data = t(expression)
+# colnames(Data) = gene_names
+# rownames(Data) = sample_annotations$ID
+# saveRDS(Data, file='Lake_filtered_expression_transposed.RDS')
+# 
+# fpath = getwd()
+# require(scImpute)
+# system.time( {scimpute(paste(fpath, 'Lake_filtered_expression_transposed.RDS', sep='/'), infile = 'rds', outfile='rds', out_dir = fpath, Kcluster = length(unique(sample_annotations$Cluster)), ncores = 8)} )
+
+# Terrible! It needs the number of cell types!
+```
+
+## Save imputed profiles
+```{r}
+# save(Arch.imputed.profile, PR.imputed.profile.rescaled, symPR.imputed.profile.rescaled, MAGIC.imputed.profile, file = 'Lake_imputed_filtered_profiles.RDS')
+
+load(file = 'Lake_imputed_filtered_profiles.RDS')
+
+```
+
+## Load PCNet (Parsed from: "Systematic Evaluation of Molecular Networks for Discovery of Disease Genes")
+
+```{r}
+PCNet = as(readMM('../../input/networks/PCNet/PCNet.mm'), 'CsparseMatrix')
+PCNet_genes = read.csv('../../input/networks/PCNet/PCNet_genes.txt', as.is = TRUE)$Genes
+rownames(PCNet) = PCNet_genes
+colnames(PCNet) = PCNet_genes
+
+```
+
+
+## Construct gold standard for cell-type specific edges
+```{r message=FALSE, warning=FALSE}
+input_folder = '/home/shahin/Dropbox/Projects/SingleCell/RSG18/results/final/input'
+Brain.markers = read.table(paste(input_folder, 'Brain_markers_PEC.txt', sep='/'), sep='\t', header = TRUE, as.is = TRUE);
+Brain.markers$Cluster[substr(Brain.markers$Cluster, 1, 2) == 'Ex'] = 'Ex'
+Brain.markers$Cluster[substr(Brain.markers$Cluster, 1, 2) == 'In'] = 'In'
+Brain.markers = Brain.markers[Brain.markers$Cluster %in% UL, ]
+
+# require(org.Hs.eg.db)
+# EG2HUGO = as.data.frame(org.Hs.egALIAS2EG)
+# 
+# Experimental.evidence.codes = c('EXP', 'IDA', 'IPI', 'IMP', 'IGI', 'IEP')
+# GO.annotations = as.data.frame(org.Hs.egGO2ALLEGS)
+# GO.experimental.annotations = GO.annotations[GO.annotations$Evidence %in% Experimental.evidence.codes,]
+
+
+# humanReactome <- graphite::pathways("hsapiens", "reactome")
+
+AA = as(tril(PCNet), 'dgTMatrix')
+PCNet.edge.idx = AA@i*length(PCNet_genes) + (AA@j+1)
+G = graph_from_adjacency_matrix(PCNet, mode="undirected", weighted=TRUE)
+
+unique.gold.edges = vector("list", length = length(UL))
+names(unique.gold.edges) = UL
+for(celltype in UL) {
+  printf("%s\n", celltype)
+  
+  # Transcriptional markers
+  GS = sort(unique(Brain.markers$Gene[Brain.markers$Cluster == celltype]))
+  
+  # Extend markers using networks context: genes that have many of their neighbors as markers are more likely to be markers themselves
+  N = length(PCNet_genes)
+  pos.set = intersect(GS, PCNet_genes)
+  idx = match(pos.set, PCNet_genes)
+  total_neighbors = Matrix::colSums(PCNet)
+  marker_neighbors = Matrix::colSums(PCNet[idx, ])
+  logPvals = -log10(p.adjust(phyper(marker_neighbors-1, length(pos.set), N-length(pos.set), total_neighbors, lower.tail = FALSE), method = 'bonferroni'))
+  extension = PCNet_genes[logPvals >= 2]
+  pos.set = union(pos.set, extension)
+
+  subG = induced_subgraph(G, pos.set)
+  subA = get.adjacency(subG)
+  S = solve(get.symPR.matrix(subA, 0.85))
+  D = 1 / S
+  D[subA == 0] = Inf
+  D = as.matrix(D)
+  subG.weighted = graph_from_adjacency_matrix(D, weighted=TRUE, mode="undirected")
+  V(subG.weighted)$name = V(subG)$name
+  MST = mst(subG.weighted, algorithm = 'prim')
+  X = get.edgelist(MST)
+
+  colnames(X) = c('Source', 'Target');
+  X[, 1] = as.character(X[, 1]);
+  X[, 2] = as.character(X[, 2]);
+  
+  # d = as.numeric(D)
+  # cap = max(d[!is.infinite(d)])
+  # D[is.infinite(D)] = cap
+  
+  # cl = cluster_louvain(subG)  
+  # labels = as.numeric(cl$membership)
+  # UC = as.numeric(names(which(table(labels) > 5)))
+  # cluster.edges = lapply(UC, function(c) {
+  #   idx = which(labels == c);
+  #   clG = induced_subgraph(subG, vids = V(subG)[idx]);
+  #   X = get.edgelist(clG);
+  #   colnames(X) = c('Source', 'Target');
+  #   X[, 1] = as.character(X[, 1]);
+  #   X[, 2] = as.character(X[, 2]);
+  #   return(X);
+  # })
+  # all.edges = do.call(rbind, cluster.edges)  
+  
+  
+  # MST = mst(subG)
+  # X = get.edgelist(MST)
+  # colnames(X) = c('Source', 'Target')
+  # X[, 1] = as.character(X[, 1])
+  # X[, 2] = as.character(X[, 2])
+  
+  # extended.marker.genes = intersect(pos.set, PCNet_genes)
+  # extended.marker.gene.entrez.id = unique(EG2HUGO$gene_id[EG2HUGO$alias_symbol %in% extended.marker.genes])
+  
+  # terms = gProfileR::gprofiler(pos.set, max_set_size = 500, src_filter = c('GO:BP'), hier_filtering = 'moderate')
+  # 
+  # 
+  # selected.edges = lapply(terms$intersection, function(genes) {
+  #   gene.names = strsplit(genes, ',')[[1]]
+  #   idx = match(gene.names, PCNet_genes) 
+  #   idx = idx[!is.na(idx)] 
+  # 
+  #   ii = rep(1:length(idx), length(idx))
+  #   jj = sapply(1:length(idx), function(x) rep(x, length(idx)))
+  #   
+  #   sub.idx = (idx[ii]-1)*length(PCNet_genes) + idx[jj]
+  # })
+  # common.edges = intersect(unique(unlist(selected.edges)), PCNet.edge.idx)
+  # 
+  # src.idx = (common.edges %/% length(PCNet_genes))+1
+  # dst.idx = common.edges %% length(PCNet_genes)
+  # src.name = PCNet_genes[src.idx]
+  # dst.name = PCNet_genes[dst.idx]
+  # X = data.frame(Source=src.name, Target=dst.name, stringsAsFactors = FALSE)    
+
+    unique.gold.edges[[celltype]] = X
+  
+# 
+#   selected.edges = lapply(terms$term.id, function(term.id) {
+#     gene.entrez = GO.annotations$gene_id[which(GO.annotations$go_id == term.id)]
+#     gene.names = intersect(sort(unique(EG2HUGO$alias_symbol[EG2HUGO$gene_id %in% gene.entrez])), PCNet_genes)
+#     rows = match(gene.names, PCNet_genes)    
+#     cols = match(extended.marker.genes, PCNet_genes)
+#     sub.idx = (rows-1)*length(PCNet_genes)+cols
+#     common.edges = intersect(PCNet.edge.idx, sub.idx)
+#     src.idx = (common.edges %/% length(PCNet_genes))+1
+#     dst.idx = common.edges %% length(PCNet_genes)
+#     src.name = PCNet_genes[src.idx]
+#     dst.name = PCNet_genes[dst.idx]
+#     gold.edges = data.frame(Source=src.name, Target=dst.name, stringsAsFactors = FALSE)
+#   })
+#   
+  
+  # all.selected.edges = do.call(rbind, selected.edges)
+  # ii = match(all.selected.edges$Source, PCNet_genes)
+  # jj = match(all.selected.edges$Target, PCNet_genes)
+  # idx = (ii-1)*length(PCNet_genes) + jj
+  # unique.edge.idx = sort(unique(idx))  
+  
+  # src.idx = (unique.edge.idx %/% length(PCNet_genes))+1
+  # dst.idx = unique.edge.idx %% length(PCNet_genes)
+  # src.name = PCNet_genes[src.idx]
+  # dst.name = PCNet_genes[dst.idx]
+  # 
+  # X =data.frame(Source=src.name, Target=dst.name)
+  # X = X[order(unique.edge.idx),]
+  # 
+  # unique.gold.edges[[celltype]] = X
+
+  
+  
+  
+  # extended.marker.genes = pos.set
+  # extended.marker.gene.entrez.id = unique(EG2HUGO$gene_id[EG2HUGO$alias_symbol %in% extended.marker.genes])
+  # 
+  # # Use extended set of markers as probes to identify relevant celltype-specific REACTOME pathways
+  # terms <- ReactomePA::enrichPathway(gene=extended.marker.gene.entrez.id, pvalueCutoff=0.05, maxGSSize = 500, readable=T)
+  # terms.table = (as.data.frame(terms))
+  # 
+  # # Retrive interactions within each significant RE pathway  
+  # RE.edges = lapply(terms.table$Description, function(pathway.id) {
+  #   pathway.entry = humanReactome[[pathway.id]]
+  #   if(!is.null(pathway.entry)) {
+  #     pSymbol <- graphite::convertIdentifiers(pathway.entry, "SYMBOL")
+  #     interaction.table = graphite::edges(pSymbol)
+  #     edges = data.frame(Source=as.character(interaction.table$src), Target=as.character(interaction.table$dest))
+  #     # mask = (edges$Source %in% extended.marker.genes) | (edges$Target %in% extended.marker.genes)
+  #     # edges = edges[mask,]
+  #   }
+  # })
+  # 
+  # # Combine all edges
+  # all.RE.edges = do.call(rbind, RE.edges)
+  
+  # Overlay on top of PCNet and keep only 'unique' edges that 'overlap' with PCNet
+  # mask = (all.RE.edges$Source %in% PCNet_genes) & (all.RE.edges$Target %in% PCNet_genes)
+  # all.RE.edges = all.RE.edges[mask,]
+  # 
+  # ii = match(all.RE.edges$Source, PCNet_genes)
+  # jj = match(all.RE.edges$Target, PCNet_genes)
+  # idx = (ii-1)*length(PCNet_genes) + jj
+  # 
+  # common.edges = intersect(idx, PCNet.edge.idx)
+  # src.idx = (common.edges %/% length(PCNet_genes))+1
+  # dst.idx = common.edges %% length(PCNet_genes)
+  # src.name = PCNet_genes[src.idx]
+  # dst.name = PCNet_genes[dst.idx]
+  # unique.gold.edges[[celltype]] = data.frame(Source=src.name, Target=dst.name)
+  # unique.gold.edges[[celltype]] = unique.gold.edges[[celltype]][order(common.edges),]
+
+}
+
+save(unique.gold.edges, file = '../../results/brain_gold_standard_GO.RData')
+
+```
+
+
+## Match network and expression profile
+```{r}
+common_genes = intersect(PCNet_genes, gene_names)
+
+blacklist = c('UBC', 'SUMO1', 'SUMO2', 'SUMO3', gene_names[grep('^RPL|^RPS|^MRP', gene_names)])
+# blacklist = c('UBC', 'SUMO1', 'SUMO2', 'SUMO3')
+common_genes = setdiff(common_genes, blacklist)
+
+length(common_genes)
+
+order1 = match(common_genes, gene_names)
+order2 = match(common_genes, PCNet_genes)
+
+X = PCNet[order2, order2]
+degs = Matrix::rowSums(PCNet[order2, order2] > 0)
+isolated_genes = which(degs == 0)
+length(isolated_genes)
+
+# sample_count = Matrix::rowSums(Arch.imputed.profile[order1,])
+# missed_genes = which(sample_count == 0);
+# 
+# filtered_genes = union(isolated_genes, missed_genes)
+# 
+# common_genes = common_genes[-filtered_genes]
+# length(common_genes)
+
+order1 = match(common_genes, gene_names)
+# A0 = expression[order1, ]
+# A1 = Arch.imputed.profile[order1,];
+# A2 = PR.imputed.profile.rescaled[order1,];
+# A3 = symPR.imputed.profile.rescaled[order1,];
+# A4 = MAGIC.imputed.profile[order1,];
+
+# A0 = MAGIC.imputed.profile[order1, ]
+A1 = Arch.imputed.profile[order1, ]
+# A2 = PR.imputed.profile.rescaled_K30_0.15[order1, ]
+# A3 = PR.imputed.profile.rescaled_K30_0.85[order1, ]
+# A4 = PR.imputed.profile.rescaled_sqrtK_0.15[order1, ]
+# A5 = PR.imputed.profile.rescaled_sqrtK_0.85[order1, ]
+
+
+
+order2 = match(common_genes, PCNet_genes)
+net = matrix(as.numeric(PCNet[order2, order2] > 0), ncol = length(common_genes))
+
+dim(A1)
+dim(net)
+sum(net > 0)/2
+
+# save(A, net, common_genes, Labels, file = '../../results/Lake_Fcx_mapped_datasets.RData')
+
+# save(net, common_genes, file = '../../results/networks/PCNet_pruned.RData')
+
+```
+
+
+
+
+## Construct gold standard for cell-type specific edges (topological enrichment trial)
+```{r}
+# require(org.Hs.eg.db)
+# EG2HUGO = as.data.frame(org.Hs.egALIAS2EG)
+# 
+# idx = match(gene_names, EG2HUGO$alias_symbol)
+# all.EG = EG2HUGO$gene_id[idx]
+# unique.rows = match(unique(all.EG), all.EG)
+# ALL = as.character(unique(all.EG))
+
+DE.LFR = sapply(UL, function(celltype) {
+       mu = Matrix::rowMeans(A3[,Labels == celltype])
+       Null.profile = sapply(setdiff(UL, celltype), function(celltype) {
+               avg = Matrix::rowMeans(A3[,Labels == celltype])
+       })
+       Null.max = apply(Null.profile, 1, max)
+       LFR = log2(mu / Null.max)
+       LFR[is.na(LFR) | is.infinite(LFR)] = 0;
+       return(LFR)
+})
+# rows = match(common_genes, gene_names)
+# 
+# DE.LFR = DE.LFR[rows, ]
+rownames(DE.LFR) = common_genes
+colnames(DE.LFR) = UL
+
+require(PCSF)
+require(igraph)
+
+G = graph_from_adjacency_matrix(net, mode = "undirected", weighted = TRUE)
+V(G)$name = common_genes
+
+
+# input_folder = '/home/shahin/Dropbox/Projects/SingleCell/RSG18/results/final/input'
+# Brain.markers = read.table(paste(input_folder, 'Brain_markers_all.txt', sep='/'), sep='\t', header = TRUE, as.is = TRUE);
+# Brain.markers$Cluster[substr(Brain.markers$Cluster, 1, 2) == 'Ex'] = 'Ex'
+# Brain.markers$Cluster[substr(Brain.markers$Cluster, 1, 2) == 'In'] = 'In'
+# Brain.markers = Brain.markers[Brain.markers$Cluster %in% UL, ]
+
+unique.gold.edges = vector("list", length = length(UL))
+names(unique.gold.edges) = UL
+for(celltype in as.character(UL)) {
+  printf("%s\n", celltype)
+  
+  # Transcriptional markers
+  # GS = sort(intersect(unique(Brain.markers$Gene[Brain.markers$Cluster == celltype & Brain.markers$Average.Difference..log.fold.change. >= 1]), common_genes))
+  # 
+  # prizes = sapply(GS, function(gene) {
+  #   rows = which ( (Brain.markers$Gene == gene) & (Brain.markers$Cluster == celltype) )
+  #   max(Brain.markers$Average.Difference..log.fold.change.[rows])
+  # })
+  # names(prizes) = GS
+  rows = which(DE.LFR[, celltype] > 1)
+  prizes = DE.LFR[rows, celltype]
+  names(prizes) = common_genes[rows]
+  
+  subnet = PCSF::PCSF_rand(G, prizes, 10)
+  
+  unique.gold.edges[[celltype]] = get.edgelist(subnet)
+}
+
+
+save(unique.gold.edges, file = '../../results/brain_gold_standard_PCSF.RData')
+
+
+
+
+
+# require(graphite)
+# biocarta <- pathways("hsapiens", "biocarta")
+# humancyc <- pathways("hsapiens", "humancyc")
+# reactome <- pathways("hsapiens", "reactome")
+# 
+# db <- convertIdentifiers(reactome, "ENTREZID")
+# prepareSPIA(db, "dbEx")
+# 
+# celltype = 'Ast'
+# DE = as.numeric(DE.LFR[, celltype])
+# names(DE) = as.numeric(ALL)
+# X = runSPIA(DE, ALL, "dbEx")
+
+
+```
+
+
+## Basic network
+```{r eval=FALSE}
+Avg.profile = sapply(UL, function(celltype) {
+       avg = Matrix::rowMeans(A0[,Labels == celltype])
+})
+rownames(Avg.profile) = common_genes
+
+scaled.Avg.profile  = dim(Avg.profile)[1]*scale(Avg.profile, center = FALSE, scale = colSums(Avg.profile))
+colnames(scaled.Avg.profile) = UL
+
+row.scaled.Avg.profile  = t(dim(Avg.profile)[2]*scale(t(Avg.profile), center = FALSE, scale = rowSums(Avg.profile)))
+colnames(row.scaled.Avg.profile) = UL
+
+
+N = length(common_genes)
+Adj = as(net, 'dgTMatrix')
+mu = lapply(as.character(UL), function(celltype) {
+  v = scaled.Avg.profile[, celltype]
+  row = Adj@i+1
+  col = Adj@j+1
+  w = as.numeric(v[Adj@i+1]*v[Adj@j+1])
+  ct.Adj = sparseMatrix(i = row, j = col, x = w, dims=c(N, N));
+})
+names(mu) = UL
+save(mu, common_genes, file = '../../results/networks/Lake_Fcx_networks_naive.RData')
+
+  
+Markers = lapply(UL, function(celltype) {
+       mu = Matrix::rowMeans(A0[,Labels == celltype])
+       Null.profile = sapply(setdiff(UL, celltype), function(celltype) {
+               avg = Matrix::rowMeans(A0[,Labels == celltype])
+       })
+       Null.max = apply(Null.profile, 1, max)
+       LFR = log2(mu / Null.max)
+       LFR[is.na(LFR) | is.infinite(LFR)] = 0;
+       unique(sort(common_genes[LFR > 2]))
+})
+
+names(Markers) = UL
+```
+
+
+### Network inference
+
+```{r}
+library(SCINET)
+require(R.utils)
+# load(file = '../results/Lake_Fcx_mapped_datasets.RData')
+
+Adj = list(Arch.PEC = A1) #, Arch_noPCA=A1, PR30_15=A2, PR30_85=A3, PRsqrtK_15=A4, PRsqrtK_85=A5)
+
+
+lapply(names(Adj), function(imputation) {
+  A = Adj[[imputation]]
+  mu = vector("list", length(UL))
+  names(mu) = UL
+  for (celltype in UL) {
+    printf('%s-- %s\n', imputation, celltype)
+    celltype_samples = which(Labels %in% celltype)
+    Net_stats = constructNet(A = as.matrix(A), net=net, samples = celltype_samples, rand_sample_no = 1000, rand_sample_size = 30, thread_no = 8)
+    mu[[celltype]] = as(Net_stats$mu, 'sparseMatrix');
+  }
+  save(mu, common_genes, file = sprintf('../../results/networks/Lake_Fcx_networks_%s_uncorrected.RData', imputation))
+})
+
+############################################
+
+# mu = vector("list", length(UL))
+# sigma = vector("list", length(UL))
+# 
+# names(mu) = UL
+# names(sigma) = UL
+# ##################################################################################################
+# require(R.utils)
+# for (celltype in UL) {
+#   printf('%s\n', celltype)
+# #for (celltype in UL) {
+#   celltype_samples = which(Labels %in% celltype)
+#   Net_stats = constructNet(A = as.matrix(A1), net=net, samples = celltype_samples, rand_sample_no = 100, rand_sample_size = 30, thread_no = 8)
+#   mu[[celltype]] = as(Net_stats$mu, 'sparseMatrix');
+#   sigma[[celltype]] = as(Net_stats$sigma_sq, 'sparseMatrix');
+# }
+##################################################################################################
+# write.table(common_genes, '../../results/networks/shared_genes.txt', quote = FALSE, col.names = FALSE, row.names = FALSE)
+# 
+# for (celltype in UL) {
+#   adj = mu[[celltype]];
+#   adj[is.na(adj)] = 0;
+#   mu[[celltype]] = adj
+#   EdgeList = as(adj, 'dgTMatrix')
+#   EdgeList.df = data.frame(Source=common_genes[EdgeList@i+1], Target=common_genes[EdgeList@j+1], Weight=EdgeList@x)
+#   EdgeList.df = EdgeList.df[order(EdgeList.df$Weight, decreasing = TRUE),]
+#   write.table(EdgeList.df, sprintf('../../results/networks/%s_net_MAGIC.tsv', celltype), quote = FALSE, col.names = TRUE, row.names = FALSE)
+# }
+#################################################
+# save(net, mu, sigma, common_genes, file = '../../results/networks/Lake_Fcx_networks_Arch_uncorrected.RData')
+# 
+
+```

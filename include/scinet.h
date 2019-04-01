@@ -31,8 +31,18 @@ uvec read_uvec(char *path);
 
 mat PRImpute(sp_mat profile, sp_mat net, uvec cols, int method, double alpha);
 
-field<mat> constructNet(mat A, mat net, uvec samples, int rand_sample_no, int rand_sample_size, int thread_no);
-mat identifyDiffEdges(mat mu1, mat sigma1_sq, int n1, mat mu2, mat sigma2_sq, int n2);
-
+namespace SCINET {
+	// Returns a network per condition
+	field<mat> constructNet(mat A, mat net, uvec samples, int thread_no);
+	
+	// Returns mean and std stats for each edge within the group
+	field<mat> constructNet_summary(mat A, mat net, uvec samples, int rand_sample_no, int rand_sample_size, int thread_no);
+	
+	// Performs differential network analysis
+	mat identifyDiffEdges(mat mu1, mat sigma1_sq, int n1, mat mu2, mat sigma2_sq, int n2);
+	
+	// Tissue/cell-type cross-talk
+	field<mat> constructNet_crossing(mat A, mat net, uvec rows1, uvec samples1, uvec rows2, uvec samples2, int rand_sample_no, int rand_sample_size, int thread_no);	
+}
 
 #endif

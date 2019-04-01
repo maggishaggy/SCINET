@@ -17,12 +17,12 @@ ifeq ($(UNAME),Darwin)
 endif
 
 LIB_FLAGS=-lstdc++ ${LINALG} -lpthread
-INCLUDE=-I./include -I./include/armadillo/include -I./include/stats
+INCLUDE=-I./include -I./include/armadillo/include 
 
 SRC=src/scinet.cc src/cdflib.cc src/asa241.cc
 OBJ=$(SRC:.cc=.o)
 
-MATLAB_SRC=matlab/mex_PRImpute.cc matlab/mex_constructNet.cc matlab/mex_constructDiffNets.cc
+MATLAB_SRC=matlab/constructNet.cc matlab/constructNet_summary.cc  matlab/constructDiffNets.cc
 MATLAB_MEX=$(MATLAB_SRC:.cc=.mexa64)
 
 MATLAB_FLAGS=-DUSE_BLAS_LIB -DAXPBY -DINT_64BITS -DNDEBUG -largeArrayDims

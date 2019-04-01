@@ -1,0 +1,185 @@
+---
+title: "Constructing cell-type-specific networks in human prefrontal cortex"
+output: html_notebook
+---
+
+## Import libraries
+```{r message=FALSE, warning=FALSE}
+library(Matrix)
+library(ACTION)
+library(igraph)
+library(RColorBrewer)
+library(ggplot2)
+```
+
+
+## Process expression profile
+### Import expression matrix
+
+```{r}
+min.cells = 30;
+
+fname = '../../input/datasets/HumanBrain/Lake_Fcx_expression_org.RData'
+if(!file.exists(fname)) {
+  expression = as(readMM('../../input/datasets/HumanBrain/Lake_Fcx_expression.mm'), 'CsparseMatrix')
+  gene_names = read.table('../../input/datasets/HumanBrain/Lake_Fcx_gene_annotations.txt', as.is = T, header = T)$HGNC
+  sample_annotations = read.table('../../input/datasets/HumanBrain/Lake_Fcx_sample_annotations.txt', header = T)
+  
+  filtered_cells = which(sample_annotations$Labels %in% c('Endo', 'Per'))
+  sample_annotations = sample_annotations[-filtered_cells, ]
+  expression = expression[, -filtered_cells]
+  dim(expression)
+  
+  d = Matrix::rowSums(expression > 0);
+  gene.filter.mask = d < min.cells;
+  sum(gene.filter.mask)
+  expression = expression[!gene.filter.mask,]
+  gene_names = gene_names[!gene.filter.mask]
+  
+  dim(expression)
+  
+  d = Matrix::colSums(expression)
+  med = median(d)
+  D_inv = Diagonal(n = length(d), x = 1 / d)
+  expression  = expression %*% D_inv # normalize
+  expression = med*expression # re-scale
+  expression = log(1 + expression) # variance-stablize (using log-transform)
+  
+
+  expression = as(expression, "sparseMatrix") # convert to dgCMatrix format for passing to RCPPArmadillo (in ACTION)
+  
+  save(expression, gene_names, sample_annotations, file=fname)
+} else {
+  load(fname)
+}
+
+Labels = sample_annotations$Labels
+UL = sort(unique(Labels))
+labels = match(Labels, UL)
+
+
+```
+
+
+### Run ACTION
+```{r}
+library(ACTIONet)
+
+reduction.out = reduceGeneExpression(expression, reduced_dim = 30, method = 1, iter = 10)
+S_r = reduction.out$S_r
+V = reduction.out$V
+
+ACTION.out = runACTION(S_r, k_max = 20, thread_no = 8)
+
+```
+
+
+# Prune archetypes (new in the latest version of ACTIONet)
+```{r}
+# Remove non-specific archetypes
+reconstruct.out = reconstructArchetypes(expression, ACTION.out$C, ACTION.out$H, -1)
+
+# Remove redundant archetypes
+backbone.reduction.out = ACTIONetcore::reduceBackbone(backbone = reconstruct.out$backbone, C_stacked = reconstruct.out$C_stacked, H_stacked = reconstruct.out$H_stacked, z_threshold = 3)
+
+arch.assignments = backbone.reduction.out$representatives
+core.archs = sort(unique(arch.assignments))
+```
+
+##
+```{r}
+# Convex-regression using the reduced subset of archetypes
+H_final = runsimplexRegression(reduction.out$S_r %*% reconstruct.out$C_stacked[, core.archs], reduction.out$S_r)
+
+# "Impute" gene expression values
+metagene.archetype.profile = reduction.out$S_r %*% reconstruct.out$C_stacked[, core.archs]
+gene.archetype.profile = V %*% metagene.archetype.profile # Boosts contribution of differential genes
+Arch.imputed.profile = gene.archetype.profile %*% H_final # Interpolate expression of cells
+rownames(Arch.imputed.profile) = gene_names
+
+dim(Arch.imputed.profile)
+```
+
+
+## Load PCNet (Parsed from: "Systematic Evaluation of Molecular Networks for Discovery of Disease Genes")
+
+```{r}
+PCNet = as(readMM('../../input/networks/PCNet/PCNet.mm'), 'CsparseMatrix')
+PCNet_genes = read.csv('../../input/networks/PCNet/PCNet_genes.txt', as.is = TRUE)$Genes
+rownames(PCNet) = PCNet_genes
+colnames(PCNet) = PCNet_genes
+
+```
+
+
+## Match network and expression profile
+```{r}
+common_genes = intersect(PCNet_genes, gene_names)
+
+blacklist = c('UBC', 'SUMO1', 'SUMO2', 'SUMO3', gene_names[grep('^RPL|^RPS|^MRP', gene_names)])
+# blacklist = c('UBC', 'SUMO1', 'SUMO2', 'SUMO3')
+common_genes = setdiff(common_genes, blacklist)
+
+length(common_genes)
+
+order1 = match(common_genes, gene_names)
+order2 = match(common_genes, PCNet_genes)
+
+A = as.matrix(Arch.imputed.profile[order1, ])
+net = as.matrix(PCNet[order2, order2])
+
+dim(A)
+dim(net)
+sum(net > 0)/2
+```
+
+
+## Network inference
+
+### Compute summary network per group of cells (i.e., cell types)
+```{r}
+# load(file = '../../results/Lake_Fcx_mapped_datasets.RData')
+require(SCINET)
+require(igraph)
+require(R.utils)
+require(Matrix)
+
+UL = c('Mic') # Only construct networks for Mic for testing
+rand_sample_no = 30 # Rather small for testing. Best selected as a proportion of samples in the group
+rand_sample_size = 10 # Rather small for test. Suggested: 30
+
+nets = vector("list", length(UL))
+names(nets) = UL
+for (celltype in UL) {
+  printf('Celltype %s\n', celltype)
+  
+  celltype_samples = which(Labels %in% celltype)
+  Net_stats = constructNet_summary(A = A,  net=net, samples = celltype_samples, rand_sample_no = 30, rand_sample_size = 10, thread_no = 8)
+  
+  # Prune to the most significant edges and construct an igraph object
+  Adj = Net_stats$mu
+  Adj[Adj < 2 + log10(length(Adj))] = 0
+  Adj = as(Adj, 'sparseMatrix');
+  specific_net = graph_from_adjacency_matrix(Adj, weighted = TRUE, mode = "undirected")
+  V(specific_net)$name = common_genes
+
+  nets[[celltype]] = specific_net
+}
+
+G = nets[['Mic']]
+EdgeList.Mic1 = as.data.frame(cbind(get.edgelist(G), get.edge.attribute(G, "weight")))
+colnames(EdgeList.Mic1) = c('src', 'dst', 'weight')
+EdgeList.Mic1 = EdgeList.Mic1[order(EdgeList.Mic1$weight, decreasing = TRUE), ]
+```
+
+### Compute a single network per cell
+```{r}
+# Construct networks for 50 random Mic samples
+fullNets = constructNet(A = A, net=net, samples = which(Labels == 'Mic')[1:30], thread_no = 8)
+w = rowMeans(fullNets$weights)
+subs = fullNets$subs + 1
+
+EdgeList.Mic2 = data.frame(src = common_genes[subs[, 1]], dst = common_genes[subs[, 2]], weight = w)
+EdgeList.Mic2 = EdgeList.Mic2[order(EdgeList.Mic2$weight, decreasing = TRUE), ]
+
+```
